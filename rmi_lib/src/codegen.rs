@@ -753,21 +753,24 @@ inline size_t FCLAMP(double inp, double bound) {{
     return Result::Ok(());
 }
 
-
-pub fn output_rmi(namespace: &str,
-                  mut trained_model: TrainedRMI,
-                  data_dir: &str,
-                  key_type: KeyType,
-                  include_errors: bool) -> Result<(), std::io::Error> {
-    
-    let f1 = File::create(format!("{}.cpp", namespace)).expect("Could not write RMI CPP file");
+pub fn output_rmi(
+    namespace: &str,
+    mut trained_model: TrainedRMI,
+    src_dir: &str,
+    data_dir: &str,
+    key_type: KeyType,
+    include_errors: bool,
+) -> Result<(), std::io::Error> {
+    let f1 = File::create(Path::new(src_dir).join(format!("{}.cpp", namespace)))
+        .expect("Could not write RMI CPP file");
     let mut bw1 = BufWriter::new(f1);
-    
-    let f2 =
-        File::create(format!("{}_data.h", namespace)).expect("Could not write RMI data file");
+
+    let f2 = File::create(Path::new(src_dir).join(format!("{}_data.h", namespace)))
+        .expect("Could not write RMI data file");
     let mut bw2 = BufWriter::new(f2);
-    
-    let f3 = File::create(format!("{}.h", namespace)).expect("Could not write RMI header file");
+
+    let f3 = File::create(Path::new(src_dir).join(format!("{}.h", namespace)))
+        .expect("Could not write RMI header file");
     let mut bw3 = BufWriter::new(f3);
 
     if !include_errors {

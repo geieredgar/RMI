@@ -453,8 +453,8 @@ fn generate_code<T: Write>(
     header_output: &mut T,
     namespace: &str,
     rmi: TrainedRMI,
-    data_dir: &str,
-    key_type: KeyType
+    data_dir: &Path,
+    key_type: KeyType,
 ) -> Result<(), std::io::Error> {
     // construct the code for the model parameters.
     let mut layer_params: Vec<LayerParams> = rmi.rmi
@@ -756,8 +756,8 @@ inline size_t FCLAMP(double inp, double bound) {{
 pub fn output_rmi(
     namespace: &str,
     mut trained_model: TrainedRMI,
-    src_dir: &str,
-    data_dir: &str,
+    src_dir: &Path,
+    data_dir: &Path,
     key_type: KeyType,
     include_errors: bool,
 ) -> Result<(), std::io::Error> {

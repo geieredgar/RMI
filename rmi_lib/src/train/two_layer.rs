@@ -164,7 +164,7 @@ pub fn train_two_layer<T: TrainingKey>(md_container: &mut RMITrainingData<T>,
                                                0,
                                                first_half_models),
                           || build_models_from(&md_container, &top_model, layer2_model,
-                                               split_idx + 1, md_container.len(),
+                                               split_idx, md_container.len(),
                                                split_idx_target,
                                                second_half_models));
 

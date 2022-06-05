@@ -1,30 +1,27 @@
-// < begin copyright > 
+// < begin copyright >
 // Copyright Ryan Marcus 2020
-// 
+//
 // See root directory of this project for license terms.
-// 
-// < end copyright > 
- 
- 
+//
+// < end copyright >
 
 use crate::models::Model;
 use crate::models::*;
+use crate::train::TrainedRMI;
 use bytesize::ByteSize;
 use log::*;
 use std::collections::HashSet;
-use std::io::Write;
-use std::str;
-use crate::train::TrainedRMI;
+use std::fmt;
 use std::fs::File;
 use std::io::BufWriter;
+use std::io::Write;
 use std::path::Path;
-use std::fmt;
-
+use std::str;
 
 enum LayerParams {
     Constant(usize, Vec<ModelParam>),
     Array(usize, usize, Vec<ModelParam>),
-    MixedArray(usize, usize, Vec<ModelParam>)
+    MixedArray(usize, usize, Vec<ModelParam>),
 }
 
 macro_rules! constant_name {
@@ -33,19 +30,19 @@ macro_rules! constant_name {
     };
 }
 
-
 macro_rules! array_name {
     ($layer: expr) => {
         format!("L{}_PARAMETERS", $layer)
-    }
+    };
 }
 
 impl LayerParams {
-
-    fn new(idx: usize,
-           array_access: bool,
-           params_per_model: usize,
-           params: Vec<ModelParam>) -> LayerParams {
+    fn new(
+        idx: usize,
+        array_access: bool,
+        params_per_model: usize,
+        params: Vec<ModelParam>,
+    ) -> LayerParams {
         // first, if the underlying data is mixed, we can only support array mode.
         let first_param = params.first().unwrap();
         let mixed = !params.iter().all(|p| first_param.is_same_type(p));
@@ -61,7 +58,7 @@ impl LayerParams {
 
         return LayerParams::Constant(idx, params);
     }
-    
+
     fn to_code<T: Write>(&self, target: &mut T) -> Result<(), std::io::Error> {
         match self {
             LayerParams::Constant(idx, params) => {
@@ -91,7 +88,7 @@ impl LayerParams {
                 }
                 write!(target, "{}", last.c_val())?;
                 writeln!(target, "}};")?;
-            },
+            }
 
             LayerParams::MixedArray(_, _, _) => {
                 panic!("Cannot hardcode mixed array.");
@@ -106,10 +103,10 @@ impl LayerParams {
             LayerParams::Array(_, _, params) => {
                 let array_size: usize = params.iter().map(|p| p.size()).sum();
                 return array_size >= 4 * 1024;
-            },
+            }
             LayerParams::MixedArray(_, _, _) => true,
             LayerParams::Constant(_, _) => false,
-        }; 
+        };
     }
 
     fn pointer_type(&self) -> &'static str {
@@ -117,10 +114,10 @@ impl LayerParams {
         return match self {
             LayerParams::Array(_, _, params) => params[0].c_type(),
             LayerParams::MixedArray(_, _, _) => "char",
-            LayerParams::Constant(_, _) => panic!("No pointer type for constant params")
+            LayerParams::Constant(_, _) => panic!("No pointer type for constant params"),
         };
     }
-    
+
     fn to_decl<T: Write>(&self, target: &mut T) -> Result<(), std::io::Error> {
         match self {
             LayerParams::Constant(_, _) => {
@@ -128,7 +125,7 @@ impl LayerParams {
             }
 
             LayerParams::Array(idx, _, params) => {
-                if !self.requires_malloc()  {
+                if !self.requires_malloc() {
                     let num_items: usize = params.iter().map(|p| p.len()).sum();
                     writeln!(
                         target,
@@ -137,34 +134,23 @@ impl LayerParams {
                         array_name!(idx),
                         num_items
                     )?;
-                } else { 
-                    writeln!(
-                        target,
-                        "{}* {};",
-                        params[0].c_type(),
-                        array_name!(idx)
-                    )?;
+                } else {
+                    writeln!(target, "{}* {};", params[0].c_type(), array_name!(idx))?;
                 }
-            },
+            }
 
             LayerParams::MixedArray(idx, _, _) => {
                 assert!(self.requires_malloc());
-                writeln!(
-                    target,
-                    "char* {};",
-                    array_name!(idx)
-                )?;
+                writeln!(target, "char* {};", array_name!(idx))?;
             }
         };
 
         return Result::Ok(());
     }
 
-
     fn write_to<T: Write>(&self, target: &mut T) -> Result<(), std::io::Error> {
-        match self {   
-            LayerParams::Array(_idx, _, params) |
-            LayerParams::MixedArray(_idx, _, params) => {
+        match self {
+            LayerParams::Array(_idx, _, params) | LayerParams::MixedArray(_idx, _, params) => {
                 let (first, rest) = params.split_first().unwrap();
 
                 first.write_to(target)?;
@@ -175,43 +161,38 @@ impl LayerParams {
                     itm.write_to(target)?;
                 }
                 return Ok(());
-            },
-            LayerParams::Constant(_, _) =>
+            }
+            LayerParams::Constant(_, _) => {
                 panic!("Cannot write constant parameters to binary file.")
+            }
         };
     }
 
     fn params(&self) -> &[ModelParam] {
         return match self {
-            LayerParams::Array(_, _, params) |
-            LayerParams::MixedArray(_, _, params)
-                => params,
-            LayerParams::Constant(_, params) => params
+            LayerParams::Array(_, _, params) | LayerParams::MixedArray(_, _, params) => params,
+            LayerParams::Constant(_, params) => params,
         };
     }
 
     fn index(&self) -> usize {
         return match self {
-            LayerParams::Array(idx, _, _) |
-            LayerParams::MixedArray(idx, _, _)
-                => *idx,
-            LayerParams::Constant(idx, _) => *idx
+            LayerParams::Array(idx, _, _) | LayerParams::MixedArray(idx, _, _) => *idx,
+            LayerParams::Constant(idx, _) => *idx,
         };
     }
 
     fn params_per_model(&self) -> usize {
         return match self {
-            LayerParams::Array(_idx, ppm, _params) |
-            LayerParams::MixedArray(_idx, ppm, _params)
-                => *ppm,
-            LayerParams::Constant(_, params) => params.len()
+            LayerParams::Array(_idx, ppm, _params)
+            | LayerParams::MixedArray(_idx, ppm, _params) => *ppm,
+            LayerParams::Constant(_, params) => params.len(),
         };
     }
 
     fn size(&self) -> usize {
         return self.params().iter().map(|p| p.size()).sum();
     }
-
 
     fn access_by_const<T: Write>(
         &self,
@@ -229,16 +210,18 @@ impl LayerParams {
         &self,
         target: &mut T,
         model_index: &str,
-        parameter_index: usize
+        parameter_index: usize,
     ) -> Result<(), std::io::Error> {
-
         if self.params()[0].is_array() {
-            assert_eq!(self.params().len(), 1,
-                       "Layer params with array had more than one member.");
+            assert_eq!(
+                self.params().len(),
+                1,
+                "Layer params with array had more than one member."
+            );
             write!(target, "{}", array_name!(self.index()))?;
             return Result::Ok(());
         }
-        
+
         match self {
             LayerParams::Constant(idx, _) => {
                 panic!(
@@ -251,10 +234,9 @@ impl LayerParams {
                 if params[0].is_array() {
                     assert_eq!(params.len(), 1);
                 }
-                let expr = format!("{}*{} + {}",
-                                   params_per_model, model_index, parameter_index);
+                let expr = format!("{}*{} + {}", params_per_model, model_index, parameter_index);
                 write!(target, "{}[{}]", array_name!(idx), expr)?;
-            },
+            }
 
             LayerParams::MixedArray(idx, params_per_model, params) => {
                 // determine the number of bytes for each model
@@ -267,18 +249,24 @@ impl LayerParams {
                 for item in params.iter().take(parameter_index) {
                     offset += item.size();
                 }
-                
+
                 // we have to determine the type of the index being accessed
                 // and add the appropiate cast.
                 let c_type = params[parameter_index].c_type();
-                let ptr_expr = format!("{} + ({} * {}) + {}",
-                                       array_name!(idx),
-                                       model_index, bytes_per_model,
-                                       offset);
-                                       
-                write!(target, "*(({new_type}*) ({ptr_expr}))",
-                       new_type=c_type, ptr_expr=ptr_expr)?;
-                
+                let ptr_expr = format!(
+                    "{} + ({} * {}) + {}",
+                    array_name!(idx),
+                    model_index,
+                    bytes_per_model,
+                    offset
+                );
+
+                write!(
+                    target,
+                    "*(({new_type}*) ({ptr_expr}))",
+                    new_type = c_type,
+                    ptr_expr = ptr_expr
+                )?;
             }
         };
 
@@ -286,61 +274,77 @@ impl LayerParams {
     }
 
     fn with_zipped_errors(&self, lle: &[u64]) -> LayerParams {
-        
         let params = self.params();
         // integrate the errors into the model parameters of the last
         // layer to save a cache miss.
-        
+
         // TODO we should add padding to make sure each of these are
         // cache-aligned. Also a lot of unneeded copying going on here...
-        let combined_lle_params: Vec<ModelParam> =
-            params.chunks(self.params_per_model())
+        let combined_lle_params: Vec<ModelParam> = params
+            .chunks(self.params_per_model())
             .zip(lle)
             .flat_map(|(mod_params, err)| {
                 let mut to_r: Vec<ModelParam> = Vec::new();
                 to_r.extend_from_slice(mod_params);
                 to_r.push(ModelParam::Int(*err));
                 to_r
-            }).collect();
+            })
+            .collect();
 
         let is_constant = if let LayerParams::Constant(_, _) = self {
             true
         } else {
             false
         };
-        
-        return LayerParams::new(self.index(), is_constant, self.params_per_model() + 1,
-                                combined_lle_params);
-                                
+
+        return LayerParams::new(
+            self.index(),
+            is_constant,
+            self.params_per_model() + 1,
+            combined_lle_params,
+        );
     }
 }
 
 impl fmt::Display for LayerParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LayerParams::Constant(idx, params) =>
-                write!(f, "Constant(idx: {}, len: {}, malloc: {})",
-                       idx, params.len(), self.requires_malloc()),
-            LayerParams::Array(idx, ppm, params) =>
-                write!(f, "Array(idx: {}, ppm: {}, len: {}, malloc: {})",
-                       idx, ppm, params.len(), self.requires_malloc()),
-            LayerParams::MixedArray(idx, ppm, params) =>
-                write!(f, "MixedArray(idx: {}, ppm: {}, len: {}, malloc: {})",
-                       idx, ppm, params.len(), self.requires_malloc())
-                
+            LayerParams::Constant(idx, params) => write!(
+                f,
+                "Constant(idx: {}, len: {}, malloc: {})",
+                idx,
+                params.len(),
+                self.requires_malloc()
+            ),
+            LayerParams::Array(idx, ppm, params) => write!(
+                f,
+                "Array(idx: {}, ppm: {}, len: {}, malloc: {})",
+                idx,
+                ppm,
+                params.len(),
+                self.requires_malloc()
+            ),
+            LayerParams::MixedArray(idx, ppm, params) => write!(
+                f,
+                "MixedArray(idx: {}, ppm: {}, len: {}, malloc: {})",
+                idx,
+                ppm,
+                params.len(),
+                self.requires_malloc()
+            ),
         }
     }
 }
 
-fn params_for_layer(layer_idx: usize,
-                    models: &[Box<dyn Model>])
-                    -> LayerParams {
+fn params_for_layer(layer_idx: usize, models: &[Box<dyn Model>]) -> LayerParams {
     let params_per_model = models[0].params().len();
     let params = models.iter().flat_map(|m| m.params()).collect();
-    return LayerParams::new(layer_idx,
-                            models.len() > 1, // array access on non-singleton layers
-                            params_per_model,
-                            params);
+    return LayerParams::new(
+        layer_idx,
+        models.len() > 1, // array access on non-singleton layers
+        params_per_model,
+        params,
+    );
 }
 
 macro_rules! model_index_from_output {
@@ -367,7 +371,6 @@ macro_rules! model_index_from_output {
                     format!("i128pred")
                 }
             }
-
         }
     };
 }
@@ -377,7 +380,7 @@ pub fn rmi_size(rmi: &TrainedRMI) -> u64 {
     let mut num_total_bytes = 0;
     for layer in rmi.rmi.iter() {
         let model_on_this_layer_size: usize = layer[0].params().iter().map(|p| p.size()).sum();
-        
+
         // assume all models on this layer have the same size
         num_total_bytes += model_on_this_layer_size * layer.len();
     }
@@ -389,15 +392,15 @@ pub fn rmi_size(rmi: &TrainedRMI) -> u64 {
     if rmi.cache_fix.is_some() {
         num_total_bytes += rmi.cache_fix.as_ref().unwrap().1.len() * 16;
     }
-    
+
     return num_total_bytes as u64;
 }
 
 fn generate_cache_fix_code<T: Write>(
     target: &mut T,
     rmi: &TrainedRMI,
-    array_name: String) -> Result<(), std::io::Error> {
-
+    array_name: String,
+) -> Result<(), std::io::Error> {
     let num_splines = rmi.cache_fix.as_ref().unwrap().1.len();
     let line_size = rmi.cache_fix.as_ref().unwrap().0;
     let total_keys = rmi.num_data_rows;
@@ -442,9 +445,29 @@ uint64_t lookup(uint64_t key, size_t* err) {{
   auto t = ((double)(key - pt1.key)) / (double)(pt2.key - pt1.key);
   return (((uint64_t) std::fma(1.0 - t, v0, t * v1)) / {3}) * {3};
 }}", num_splines, total_keys, array_name, line_size)?;
-    
 
     return Ok(());
+}
+
+fn generate_include_code<T: Write>(
+    code_output: &mut T,
+    header_output: &mut T,
+    base: &str,
+    cache_fix: bool,
+) -> Result<(), std::io::Error> {
+    writeln!(code_output, "#include \"{base}.h\"")?;
+    writeln!(code_output, "#include \"{base}_data.h\"")?;
+    writeln!(code_output, "#include <math.h>")?;
+    writeln!(code_output, "#include <cmath>")?;
+    writeln!(code_output, "#include <fstream>")?;
+    writeln!(code_output, "#include <filesystem>")?;
+    writeln!(code_output, "#include <iostream>")?;
+    if cache_fix {
+        writeln!(code_output, "#include <algorithm>")?;
+    }
+    writeln!(header_output, "#include <cstddef>")?;
+    writeln!(header_output, "#include <cstdint>")?;
+    Ok(())
 }
 
 fn generate_code<T: Write>(
@@ -457,12 +480,13 @@ fn generate_code<T: Write>(
     key_type: KeyType,
 ) -> Result<(), std::io::Error> {
     // construct the code for the model parameters.
-    let mut layer_params: Vec<LayerParams> = rmi.rmi
+    let mut layer_params: Vec<LayerParams> = rmi
+        .rmi
         .iter()
         .enumerate()
         .map(|(layer_idx, models)| params_for_layer(layer_idx, models))
         .collect();
-    
+
     let report_last_layer_errors = !rmi.last_layer_max_l1s.is_empty();
 
     let mut report_lle: Vec<u8> = Vec::new();
@@ -471,26 +495,31 @@ fn generate_code<T: Write>(
         if lle.len() > 1 {
             let old_last = layer_params.pop().unwrap();
             let new_last = old_last.with_zipped_errors(lle);
-            
+
             write!(report_lle, "  *err = ")?;
-            new_last.access_by_ref(&mut report_lle, "modelIndex",
-                                   new_last.params_per_model() - 1)?;
+            new_last.access_by_ref(
+                &mut report_lle,
+                "modelIndex",
+                new_last.params_per_model() - 1,
+            )?;
             writeln!(report_lle, ";")?;
-            
+
             layer_params.push(new_last);
-            
         } else {
             write!(report_lle, "  *err = {};", lle[0])?;
         }
     }
 
     if rmi.cache_fix.is_some() {
-        let cfv: Vec<ModelParam> = rmi.cache_fix.as_ref().unwrap().1.iter()
+        let cfv: Vec<ModelParam> = rmi
+            .cache_fix
+            .as_ref()
+            .unwrap()
+            .1
+            .iter()
             .flat_map(|(mi, offset)| vec![(*mi).into(), (*offset).into()])
             .collect();
-        let cache_fix_params = LayerParams::new(
-            layer_params.len(), true, 2, cfv
-        );
+        let cache_fix_params = LayerParams::new(layer_params.len(), true, 2, cfv);
 
         layer_params.push(cache_fix_params);
     }
@@ -500,36 +529,41 @@ fn generate_code<T: Write>(
         trace!("{}", lps);
     }
 
-    writeln!(data_output, "namespace {} {{", namespace)?;    
-    
+    writeln!(data_output, "namespace {} {{", namespace)?;
+
     let mut read_code = Vec::new();
     read_code.push("bool load(char const* dataPath) {".to_string());
-            
+
     for lp in layer_params.iter() {
         match lp {
-            // constants are put directly in the header 
+            // constants are put directly in the header
             LayerParams::Constant(_idx, _) => lp.to_code(data_output)?,
-            
-            LayerParams::Array(idx, _, _) |
-            LayerParams::MixedArray(idx, _, _) => {
-                let data_path = Path::new(&data_dir)
-                    .join(format!("{}_{}", namespace, array_name!(idx)));
-                let f = File::create(data_path)
-                    .expect("Could not write data file to RMI directory");
+
+            LayerParams::Array(idx, _, _) | LayerParams::MixedArray(idx, _, _) => {
+                let data_path =
+                    Path::new(&data_dir).join(format!("{}_{}", namespace, array_name!(idx)));
+                let f =
+                    File::create(data_path).expect("Could not write data file to RMI directory");
                 let mut bw = BufWriter::new(f);
-                
+
                 lp.write_to(&mut bw)?; // write to data file
                 lp.to_decl(data_output)?; // write to source code
-                
+
                 read_code.push("  {".to_string());
                 read_code.push(format!("    std::ifstream infile(std::filesystem::path(dataPath) / \"{ns}_{fn}\", std::ios::in | std::ios::binary);",
                                        ns=namespace, fn=array_name!(idx)));
                 read_code.push("    if (!infile.good()) return false;".to_string());
                 if lp.requires_malloc() {
-                    read_code.push(format!("    {} = ({}*) malloc({});",
-                                           array_name!(idx), lp.pointer_type(), lp.size()));
-                    read_code.push(format!("    if ({} == NULL) return false;",
-                                           array_name!(idx)));
+                    read_code.push(format!(
+                        "    {} = ({}*) malloc({});",
+                        array_name!(idx),
+                        lp.pointer_type(),
+                        lp.size()
+                    ));
+                    read_code.push(format!(
+                        "    if ({} == NULL) return false;",
+                        array_name!(idx)
+                    ));
                 }
                 read_code.push(format!("    infile.read((char*){fn}, {size});",
                                        fn=array_name!(idx), size=lp.size()));
@@ -541,20 +575,20 @@ fn generate_code<T: Write>(
     read_code.push("  return true;".to_string());
     read_code.push("}".to_string());
 
-
-
     let mut free_code = Vec::new();
     free_code.push("void cleanup() {".to_string());
     // generate free code
     for lp in layer_params.iter() {
-        if !lp.requires_malloc() { continue; }
+        if !lp.requires_malloc() {
+            continue;
+        }
         if let LayerParams::Array(idx, _, _) | LayerParams::MixedArray(idx, _, _) = lp {
             free_code.push(format!("    free({});", array_name!(idx)));
             continue;
         }
         panic!();
     }
-    
+
     free_code.push("}".to_string());
 
     writeln!(data_output, "}} // namespace")?;
@@ -570,17 +604,6 @@ fn generate_code<T: Write>(
         }
     }
 
-    writeln!(code_output, "#include \"{}.h\"", namespace)?;
-    writeln!(code_output, "#include \"{}_data.h\"", namespace)?;
-    writeln!(code_output, "#include <math.h>")?;
-    writeln!(code_output, "#include <cmath>")?;
-    writeln!(code_output, "#include <fstream>")?;
-    writeln!(code_output, "#include <filesystem>")?;
-    writeln!(code_output, "#include <iostream>")?;
-    if rmi.cache_fix.is_some() {
-        writeln!(code_output, "#include <algorithm>")?;
-    }
-
     writeln!(code_output, "namespace {} {{", namespace)?;
 
     for ln in read_code {
@@ -590,7 +613,7 @@ fn generate_code<T: Write>(
     for ln in free_code {
         writeln!(code_output, "{}", ln)?;
     }
-    
+
     for decl in decls {
         writeln!(code_output, "{}", decl)?;
     }
@@ -623,9 +646,13 @@ inline size_t FCLAMP(double inp, double bound) {{
     } else {
         "_rmi_lookup_pre_cachefix"
     };
-    
+
     let lookup_sig = if report_last_layer_errors {
-        format!("uint64_t {}({} key, size_t* err)", rmi_lookup_name, key_type.c_type())
+        format!(
+            "uint64_t {}({} key, size_t* err)",
+            rmi_lookup_name,
+            key_type.c_type()
+        )
     } else {
         format!("uint64_t {}({} key)", rmi_lookup_name, key_type.c_type())
     };
@@ -650,7 +677,11 @@ inline size_t FCLAMP(double inp, double bound) {{
     }
 
     let model_size_bytes = rmi_size(&rmi);
-    info!("Generated model size: {:?} ({} bytes)", ByteSize(model_size_bytes), model_size_bytes);
+    info!(
+        "Generated model size: {:?} ({} bytes)",
+        ByteSize(model_size_bytes),
+        model_size_bytes
+    );
 
     let mut last_model_output = key_type.to_model_data_type();
     let mut needs_bounds_check = true;
@@ -664,7 +695,7 @@ inline size_t FCLAMP(double inp, double bound) {{
         let var_name = match current_model_output {
             ModelDataType::Int => "ipred",
             ModelDataType::Float => "fpred",
-            ModelDataType::Int128 => "i128pred"
+            ModelDataType::Int128 => "i128pred",
         };
 
         let num_parameters = layer[0].params().len();
@@ -718,14 +749,12 @@ inline size_t FCLAMP(double inp, double bound) {{
     writeln!(code_output, "}}")?;
 
     if rmi.cache_fix.is_some() {
-        generate_cache_fix_code(code_output, &rmi, array_name!(layer_params.len()-1))?;
+        generate_cache_fix_code(code_output, &rmi, array_name!(layer_params.len() - 1))?;
     }
-    
+
     writeln!(code_output, "}} // namespace")?;
 
     // write out our forward declarations
-    writeln!(header_output, "#include <cstddef>")?;
-    writeln!(header_output, "#include <cstdint>")?;
     writeln!(header_output, "namespace {} {{", namespace)?;
 
     writeln!(header_output, "bool load(char const* dataPath);")?;
@@ -753,6 +782,79 @@ inline size_t FCLAMP(double inp, double bound) {{
     return Result::Ok(());
 }
 
+fn generate_multiplex_code<T: Write>(
+    code_output: &mut T,
+    header_output: &mut T,
+    namespace: &str,
+    offsets: Vec<usize>,
+    key_type: KeyType,
+    report_last_layer_errors: bool,
+    cache_fix: bool,
+) -> Result<(), std::io::Error> {
+    let rmi_lookup_name = if cache_fix {
+        "_rmi_lookup_pre_cachefix"
+    } else {
+        "lookup"
+    };
+    let lookup_sig = if report_last_layer_errors {
+        format!(
+            "uint64_t {}({} key, size_t* err, size_t index)",
+            rmi_lookup_name,
+            key_type.c_type()
+        )
+    } else {
+        format!("uint64_t {}({} key)", rmi_lookup_name, key_type.c_type())
+    };
+    writeln!(code_output, "namespace {namespace} {{")?;
+    writeln!(code_output, "bool load(char const *dataPath) {{")?;
+    for i in 0..offsets.len() {
+        writeln!(code_output, "if (!{namespace}_{i}::load(dataPath)) {{")?;
+        writeln!(code_output, "return false;")?;
+        writeln!(code_output, "}}")?;
+    }
+    writeln!(code_output, "return true;")?;
+    writeln!(code_output, "}}")?;
+    writeln!(code_output, "void cleanup() {{")?;
+    for i in 0..offsets.len() {
+        writeln!(code_output, "{namespace}_{i}::cleanup();")?;
+    }
+    writeln!(code_output, "}}")?;
+    writeln!(code_output, "{lookup_sig} {{")?;
+    writeln!(code_output, "switch(index) {{")?;
+    if report_last_layer_errors {
+        for i in 0..offsets.len() {
+            writeln!(
+                code_output,
+                "case {i}: return {namespace}_{i}::{rmi_lookup_name}(key, err) + {};",
+                offsets[i]
+            )?;
+        }
+        writeln!(code_output, "default: return 0;")?;
+    } else {
+        for i in 0..offsets.len() {
+            writeln!(
+                code_output,
+                "case {i}: return {namespace}_{i}::{rmi_lookup_name}(key) + {};",
+                offsets[i],
+            )?;
+        }
+        writeln!(code_output, "default: return 0;")?;
+    }
+    writeln!(code_output, "}}")?;
+    writeln!(code_output, "}}")?;
+    writeln!(code_output, "}}")?;
+    writeln!(header_output, "namespace {namespace} {{")?;
+    writeln!(header_output, "bool load(char const* dataPath);")?;
+    writeln!(header_output, "void cleanup();")?;
+    if cache_fix {
+        writeln!(header_output, "uint64_t lookup(uint64_t key, size_t* err);")?;
+    } else {
+        writeln!(header_output, "{lookup_sig};")?;
+    }
+    writeln!(header_output, "}} ")?;
+    Ok(())
+}
+
 pub fn output_rmi(
     namespace: &str,
     mut trained_model: TrainedRMI,
@@ -776,7 +878,12 @@ pub fn output_rmi(
     if !include_errors {
         trained_model.last_layer_max_l1s.clear();
     }
-
+    generate_include_code(
+        &mut bw1,
+        &mut bw3,
+        namespace,
+        trained_model.cache_fix.is_some(),
+    )?;
     return generate_code(
         &mut bw1,
         &mut bw2,
@@ -784,8 +891,65 @@ pub fn output_rmi(
         namespace,
         trained_model,
         data_dir,
-        key_type
+        key_type,
     );
-        
-    
+}
+
+pub fn output_rmis(
+    namespace: &str,
+    mut trained_models: Vec<TrainedRMI>,
+    src_dir: &Path,
+    data_dir: &Path,
+    key_type: KeyType,
+    include_errors: bool,
+) -> Result<(), std::io::Error> {
+    let f1 = File::create(Path::new(src_dir).join(format!("{}.cpp", namespace)))
+        .expect("Could not write RMI CPP file");
+    let mut bw1 = BufWriter::new(f1);
+
+    let f2 = File::create(Path::new(src_dir).join(format!("{}_data.h", namespace)))
+        .expect("Could not write RMI data file");
+    let mut bw2 = BufWriter::new(f2);
+
+    let f3 = File::create(Path::new(src_dir).join(format!("{}.h", namespace)))
+        .expect("Could not write RMI header file");
+    let mut bw3 = BufWriter::new(f3);
+
+    if !include_errors {
+        for trained_model in &mut trained_models {
+            trained_model.last_layer_max_l1s.clear();
+        }
+    }
+    let report_last_layer_errors = !trained_models[0].last_layer_max_l1s.is_empty();
+    let cache_fix = trained_models[0].cache_fix.is_some();
+    generate_include_code(&mut bw1, &mut bw3, namespace, cache_fix)?;
+    let mut offsets = Vec::with_capacity(trained_models.len());
+    let mut offset = 0;
+    for (i, trained_model) in trained_models.into_iter().enumerate() {
+        assert_eq!(
+            report_last_layer_errors,
+            !trained_model.last_layer_max_l1s.is_empty()
+        );
+        assert_eq!(cache_fix, trained_model.cache_fix.is_some());
+        offsets.push(offset);
+        offset += trained_model.num_data_rows;
+        generate_code(
+            &mut bw1,
+            &mut bw2,
+            &mut bw3,
+            &format!("{namespace}_{i}"),
+            trained_model,
+            data_dir,
+            key_type,
+        )?;
+    }
+    return generate_multiplex_code(
+        &mut bw1,
+        &mut bw3,
+        namespace,
+        offsets,
+        key_type,
+        report_last_layer_errors,
+        cache_fix,
+    );
 }
